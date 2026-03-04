@@ -3,13 +3,30 @@ import pg from "pg";
 import * as schema from "../shared/schema";
 
 const { Pool } = pg;
-
-if (!process.env.DATABASE_URL) {
-  console.error("WARNING: DATABASE_URL is not set. Database operations will fail.");
-}
+const PLACEHOLDER_DATABASE_URL = "postgresql://postgres:postgres@127.0.0.1:5432/postgres";
 
 const isServerless = !process.env.PORT && process.env.VERCEL === "1";
-const connectionString = process.env.DATABASE_URL || "postgresql://localhost:5432/placeholder";
+const rawDatabaseUrl = process.env.DATABASE_URL?.trim();
+
+function normalizeDatabaseUrl(url?: string): string {
+  if (!url) return PLACEHOLDER_DATABASE_URL;
+
+  const normalized = url.replace(/^['"]|['"]$/g, "");
+  try {
+    new URL(normalized);
+    return normalized;
+  } catch {
+    console.error("[db] Invalid DATABASE_URL format. Falling back to placeholder URL.");
+    return PLACEHOLDER_DATABASE_URL;
+  }
+}
+
+const connectionString = normalizeDatabaseUrl(rawDatabaseUrl);
+export const isDatabaseConfigured = connectionString !== PLACEHOLDER_DATABASE_URL;
+
+if (!isDatabaseConfigured) {
+  console.error("WARNING: DATABASE_URL is missing/invalid. Database operations will fail.");
+}
 
 const needsSsl =
   connectionString.includes("sslmode=require") ||

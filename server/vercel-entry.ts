@@ -3,7 +3,7 @@ import express, { type Request, Response, NextFunction } from "express";
 import session from "express-session";
 import connectPgSimple from "connect-pg-simple";
 import compression from "compression";
-import { pool } from "./db";
+import { isDatabaseConfigured, pool } from "./db";
 import { registerRoutes } from "./routes";
 import crypto from "crypto";
 
@@ -31,11 +31,11 @@ app.use(compression());
 app.use(express.json({ limit: "5mb" }));
 app.use(express.urlencoded({ extended: false }));
 
-if (!process.env.DATABASE_URL) {
+if (!isDatabaseConfigured) {
   app.use((_req: Request, res: Response) => {
     res.status(500).json({
-      error: "DATABASE_URL environment variable is not set",
-      hint: "Go to Vercel → Project Settings → Environment Variables and add DATABASE_URL",
+      error: "DATABASE_URL environment variable is missing or invalid",
+      hint: "Go to Vercel Project Settings -> Environment Variables and add a valid DATABASE_URL",
     });
   });
 } else {
@@ -43,29 +43,30 @@ if (!process.env.DATABASE_URL) {
   const sessionSecret =
     process.env.SESSION_SECRET || crypto.randomBytes(48).toString("hex");
 
-  app.use(
-    session({
-      store: new PgStore({
-        pool: pool as any,
-        tableName: "user_sessions",
-        createTableIfMissing: true,
-        pruneSessionInterval: false,
-        errorLog: (err: Error) => {
-          console.error("[session-store]", err.message);
-        },
-      }),
-      secret: sessionSecret,
-      name: "__sid",
-      resave: false,
-      saveUninitialized: false,
-      cookie: {
-        secure: process.env.FORCE_INSECURE_COOKIE !== "true",
-        httpOnly: true,
-        maxAge: 24 * 60 * 60 * 1000,
-        sameSite: "lax",
+  const sessionMiddleware = session({
+    store: new PgStore({
+      pool: pool as any,
+      tableName: "user_sessions",
+      createTableIfMissing: true,
+      pruneSessionInterval: false,
+      errorLog: (err: Error) => {
+        console.error("[session-store]", err.message);
       },
     }),
-  );
+    secret: sessionSecret,
+    name: "__sid",
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      secure: process.env.FORCE_INSECURE_COOKIE !== "true",
+      httpOnly: true,
+      maxAge: 24 * 60 * 60 * 1000,
+      sameSite: "lax",
+    },
+  });
+
+  // Avoid DB-backed session lookup on public pages like /maintenance and /r/:slug.
+  app.use("/api", sessionMiddleware);
 
   app.get("/api/health", async (_req: Request, res: Response) => {
     try {
@@ -76,7 +77,14 @@ if (!process.env.DATABASE_URL) {
     }
   });
 
-  void registerRoutes(null as any, app);
+  try {
+    void registerRoutes(null as any, app);
+  } catch (e: any) {
+    console.error("[routes-init]", e?.message || e);
+    app.use((_req: Request, res: Response) => {
+      res.status(500).json({ message: "Route initialization failed" });
+    });
+  }
 }
 
 app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
