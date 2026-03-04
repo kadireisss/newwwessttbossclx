@@ -4,14 +4,14 @@
   "outputDirectory": "dist/public",
   "framework": null,
   "functions": {
-    "api/[...route].ts": {
+    "api/index.ts": {
       "maxDuration": 30
     }
   },
   "rewrites": [
-    { "source": "/api/:path*", "destination": "/api/:path*" },
-    { "source": "/r/:path*", "destination": "/api/r/:path*" },
-    { "source": "/maintenance", "destination": "/api/maintenance" },
+    { "source": "/api/:path*", "destination": "/api?__path=/api/:path*" },
+    { "source": "/r/:path*", "destination": "/api?__path=/r/:path*" },
+    { "source": "/maintenance", "destination": "/api?__path=/maintenance" },
     { "source": "/:path*", "destination": "/index.html" }
   ]
 }
