@@ -540,8 +540,8 @@ setTimeout(function(){window.location.href=window.location.pathname+"?vt="+t+"&t
       if (typeof currentPassword !== "string" || typeof newPassword !== "string") {
         return res.status(400).json({ message: "Geçersiz şifre formatı" });
       }
-      if (newPassword.length < 8 || newPassword.length > 128) {
-        return res.status(400).json({ message: "Şifre 8-128 karakter olmalı" });
+      if (newPassword.length < 6 || newPassword.length > 128) {
+        return res.status(400).json({ message: "Şifre 6-128 karakter olmalı" });
       }
       const user = await storage.getUser(req.session.userId!);
       if (!user || !(await bcrypt.compare(currentPassword, user.password))) {

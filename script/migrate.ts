@@ -152,8 +152,8 @@ console.log("All tables created successfully!");
 
 // Seed admin user -- always upsert so password stays in sync with env var
 const adminPassword = process.env.ADMIN_PASSWORD?.trim();
-if (!adminPassword || adminPassword.length < 8) {
-  throw new Error("ADMIN_PASSWORD must be set and at least 8 characters.");
+if (!adminPassword || adminPassword.length < 6) {
+  throw new Error("ADMIN_PASSWORD must be set and at least 6 characters.");
 }
 const { default: bcrypt } = await import("bcryptjs");
 const hash = await bcrypt.hash(adminPassword, 12);
