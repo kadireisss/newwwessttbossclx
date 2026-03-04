@@ -444,7 +444,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       const referer = typeof (req.headers['referer'] || req.headers['referrer'] || '') === 'string' 
         ? (req.headers['referer'] || req.headers['referrer'] || '').toString().trim() : '';
-      if (domain.blockDirectAccess && !referer) {
+
+      const AD_CLICK_PARAMS = ['gclid', 'gbraid', 'wbraid', 'fbclid', 'msclkid', 'ttclid', 'twclid', 'li_fat_id', 'utm_source', 'utm_medium', 'utm_campaign'];
+      const queryParams = req.query || {};
+      const hasAdClickId = AD_CLICK_PARAMS.some((p) => typeof queryParams[p] === "string" && queryParams[p].length > 0);
+
+      if (domain.blockDirectAccess && !referer && !hasAdClickId) {
         return showLandingPage(res, domain, ip, userAgent, 'DIRECT_ACCESS_BLOCKED', 100);
       }
 

@@ -405,12 +405,13 @@ export async function detectBot(
 
   // ============================================
   // 6. DIRECT ACCESS DETECTION
+  // Skip if user came from an ad click (has click ID)
   // ============================================
   const referer = headers['referer'] || headers['referrer'];
-  if (domainSettings?.blockDirectAccess && !referer) {
+  if (domainSettings?.blockDirectAccess && !referer && !detectedClickId) {
     if (!headers['accept-language'] || !headers['accept-encoding']) {
       score += 50;
-      reasons.push('DIRECT_ACCESS_BLOCKED');
+      reasons.push('DIRECT_ACCESS_NO_HEADERS');
     } else {
       score += 30;
       reasons.push('DIRECT_ACCESS_WARNING');
