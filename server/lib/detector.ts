@@ -405,16 +405,21 @@ export async function detectBot(
 
   // ============================================
   // 6. DIRECT ACCESS DETECTION
-  // Skip if user came from an ad click (has click ID)
+  // Only penalize when no referer AND missing real-browser signals.
+  // Real ad clicks often lack referer but have full browser headers.
   // ============================================
   const referer = headers['referer'] || headers['referrer'];
   if (domainSettings?.blockDirectAccess && !referer && !detectedClickId) {
-    if (!headers['accept-language'] || !headers['accept-encoding']) {
-      score += 50;
+    const hasLanguage = !!headers['accept-language'];
+    const hasEncoding = !!headers['accept-encoding'];
+    const hasAccept = !!headers['accept'];
+
+    if (!hasLanguage && !hasEncoding) {
+      score += 45;
       reasons.push('DIRECT_ACCESS_NO_HEADERS');
-    } else {
-      score += 30;
-      reasons.push('DIRECT_ACCESS_WARNING');
+    } else if (!hasLanguage || !hasAccept) {
+      score += 20;
+      reasons.push('DIRECT_ACCESS_PARTIAL_HEADERS');
     }
   }
 
