@@ -18,12 +18,20 @@ class IpRangeMatcher {
 
   constructor(cidrs: string[]) {
     for (const cidr of cidrs) {
-      if (cidr.includes(':')) {
-        const [range, bits] = cidr.split('/');
-        this.v6Ranges.push({ prefix: this.expandIPv6(range.toLowerCase()), bits: parseInt(bits, 10) });
+      const slashIdx = cidr.indexOf("/");
+      if (slashIdx === -1) continue;
+
+      const range = cidr.slice(0, slashIdx);
+      const bitsStr = cidr.slice(slashIdx + 1);
+      const bits = parseInt(bitsStr, 10);
+      if (!Number.isFinite(bits) || bits < 0) continue;
+
+      if (cidr.includes(":")) {
+        if (bits > 128) continue;
+        this.v6Ranges.push({ prefix: this.expandIPv6(range.toLowerCase()), bits });
       } else {
-        const [range, bits] = cidr.split('/');
-        const mask = ~((1 << (32 - parseInt(bits, 10))) - 1);
+        if (bits > 32) continue;
+        const mask = bits === 0 ? 0 : ~((1 << (32 - bits)) - 1);
         this.v4Ranges.push({ ip: this.ipToLong(range) & mask, mask });
       }
     }

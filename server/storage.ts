@@ -6,6 +6,7 @@ import {
 } from "../shared/schema";
 import { eq, desc, and, gte, sql, lt, count } from "drizzle-orm";
 import crypto from "crypto";
+import { buildUaWildcardRegex, extractUaPatternTokens, isIpInCidr } from "./security";
 
 // ============================================
 // CACHE SYSTEM
@@ -37,8 +38,10 @@ class CacheStore<T> {
 
 export class DatabaseStorage {
   // Caches
-  private ipBlacklistCache = new CacheStore<Set<string>>(30); // 30s
-  private uaBlacklistCache = new CacheStore<{ patterns: { regex: RegExp; raw: string }[] }>(60); // 60s
+  private ipBlacklistCache = new CacheStore<{ exact: Set<string>; cidrs: string[] }>(30); // 30s
+  private uaBlacklistCache = new CacheStore<{
+    tokenSets: { token: string; wildcardRegex: RegExp | null }[][];
+  }>(60); // 60s
 
   // ============================================
   // AUTH
@@ -137,7 +140,7 @@ export class DatabaseStorage {
   // CLEANUP JOBS
   // ============================================
   async cleanupExpiredTokens(): Promise<number> {
-    const result = await db.delete(challengeTokens).where(lt(challengeTokens.expiresAt, new Date()));
+    await db.delete(challengeTokens).where(lt(challengeTokens.expiresAt, new Date()));
     return 0;
   }
 
@@ -267,10 +270,22 @@ export class DatabaseStorage {
     let cached = this.ipBlacklistCache.get();
     if (!cached) {
       const entries = await db.select({ ipAddress: ipBlacklist.ipAddress }).from(ipBlacklist);
-      cached = new Set(entries.map(e => e.ipAddress));
+      const exact = new Set<string>();
+      const cidrs: string[] = [];
+
+      for (const entry of entries) {
+        const value = entry.ipAddress.trim();
+        if (!value) continue;
+        if (value.includes("/")) cidrs.push(value);
+        else exact.add(value);
+      }
+
+      cached = { exact, cidrs };
       this.ipBlacklistCache.set(cached);
     }
-    return cached.has(ip);
+
+    if (cached.exact.has(ip)) return true;
+    return cached.cidrs.some((cidr) => isIpInCidr(ip, cidr));
   }
 
   async getIpBlacklist(): Promise<IpBlacklist[]> {
@@ -291,18 +306,31 @@ export class DatabaseStorage {
   async isUaBlacklisted(userAgent: string): Promise<boolean> {
     let cached = this.uaBlacklistCache.get();
     if (!cached) {
-      const entries = await db.select().from(userAgentBlacklist);
-      const patterns = entries.map(e => {
-        try {
-          return { regex: new RegExp(e.pattern, 'i'), raw: e.pattern };
-        } catch {
-          return { regex: new RegExp(e.pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'), raw: e.pattern };
-        }
-      });
-      cached = { patterns };
+      const entries = await db.select({ pattern: userAgentBlacklist.pattern }).from(userAgentBlacklist);
+      const tokenSets = entries
+        .map((entry) =>
+          extractUaPatternTokens(entry.pattern).map((token) => ({
+            token,
+            wildcardRegex:
+              token.includes("*") || token.includes("?")
+                ? buildUaWildcardRegex(token)
+                : null,
+          })),
+        )
+        .filter((tokens) => tokens.length > 0);
+
+      cached = { tokenSets };
       this.uaBlacklistCache.set(cached);
     }
-    return cached.patterns.some(p => p.regex.test(userAgent));
+
+    const normalizedUA = userAgent.toLowerCase();
+    return cached.tokenSets.some((tokens) =>
+      tokens.some((matcher) =>
+        matcher.wildcardRegex
+          ? matcher.wildcardRegex.test(normalizedUA)
+          : normalizedUA.includes(matcher.token),
+      ),
+    );
   }
 
   async getUaBlacklist(): Promise<UserAgentBlacklist[]> {
@@ -337,26 +365,16 @@ export class DatabaseStorage {
     return (entry.clickCount || 0) < maxClicks;
   }
 
-  async incrementRateLimit(domainId: number, ip: string, windowSeconds: number): Promise<void> {
-    const windowStart = new Date(Date.now() - windowSeconds * 1000);
-    const [existing] = await db.select()
-      .from(rateLimits)
-      .where(and(
-        eq(rateLimits.domainId, domainId),
-        eq(rateLimits.ipAddress, ip),
-        gte(rateLimits.firstClick, windowStart)
-      ));
-
-    if (existing) {
-      // Atomic increment
+  async incrementRateLimit(domainId: number, ip: string, _windowSeconds: number): Promise<void> {
+    try {
+      await db.insert(rateLimits).values({ domainId, ipAddress: ip, clickCount: 1 });
+    } catch {
       await db.update(rateLimits)
         .set({
           clickCount: sql`${rateLimits.clickCount} + 1`,
-          lastClick: new Date()
+          lastClick: new Date(),
         })
-        .where(eq(rateLimits.id, existing.id));
-    } else {
-      await db.insert(rateLimits).values({ domainId, ipAddress: ip, clickCount: 1 });
+        .where(and(eq(rateLimits.domainId, domainId), eq(rateLimits.ipAddress, ip)));
     }
   }
 

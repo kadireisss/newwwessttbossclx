@@ -592,7 +592,7 @@ export default function DomainsPage() {
                                   data-testid="input-active-hours"
                                 />
                               </FormControl>
-                              <p className="text-xs text-muted-foreground">Format: SS:DD-SS:DD (sunucu saat dilimi)</p>
+                              <p className="text-xs text-muted-foreground">Format: HH:MM-HH:MM (örn: 09:00-18:00)</p>
                             </FormItem>
                           )}
                         />

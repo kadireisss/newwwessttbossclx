@@ -7,13 +7,21 @@ if (!url) {
   process.exit(1);
 }
 
+const requiresSsl =
+  /sslmode=require/i.test(url) ||
+  /neon\.tech|supabase\.co|aivencloud\.com/i.test(url);
+const allowInsecureSsl = process.env.DB_SSL_INSECURE === "true";
+
 const client = new pg.Client({
   connectionString: url,
-  ssl: { rejectUnauthorized: false },
+  ssl: requiresSsl ? { rejectUnauthorized: !allowInsecureSsl } : undefined,
 });
 
 await client.connect();
 console.log("Connected to database");
+if (requiresSsl && allowInsecureSsl) {
+  console.warn("WARNING: DB_SSL_INSECURE=true, TLS certificate verification is disabled.");
+}
 
 const sql = `
 CREATE TABLE IF NOT EXISTS users (
@@ -129,13 +137,24 @@ CREATE TABLE IF NOT EXISTS user_sessions (
 );
 
 CREATE INDEX IF NOT EXISTS idx_session_expire ON user_sessions(expire);
+
+CREATE TABLE IF NOT EXISTS login_attempts (
+  ip_address TEXT PRIMARY KEY,
+  attempt_count INTEGER NOT NULL DEFAULT 0,
+  last_attempt TIMESTAMP NOT NULL DEFAULT NOW(),
+  locked_until TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_login_attempts_locked ON login_attempts(locked_until);
 `;
 
 await client.query(sql);
 console.log("All tables created successfully!");
 
 // Seed admin user -- always upsert so password stays in sync with env var
-const adminPassword = process.env.ADMIN_PASSWORD || "boss_admin_123";
+const adminPassword = process.env.ADMIN_PASSWORD?.trim();
+if (!adminPassword || adminPassword.length < 8) {
+  throw new Error("ADMIN_PASSWORD must be set and at least 8 characters.");
+}
 const { default: bcrypt } = await import("bcryptjs");
 const hash = await bcrypt.hash(adminPassword, 12);
 const existing = await client.query("SELECT id FROM users WHERE username = 'admin'");

@@ -27,7 +27,7 @@ export default function LandingPagesPage() {
   const { data: pages, isLoading } = useLandingPages();
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [editingPage, setEditingPage] = useState<LandingPage | null>(null);
-  const [previewPage, setPreviewPage] = useState<any>(null);
+  const [, setPreviewPage] = useState<any>(null);
   const createMutation = useCreateLandingPage();
   const updateMutation = useUpdateLandingPage();
   const deleteMutation = useDeleteLandingPage();
@@ -283,6 +283,8 @@ export default function LandingPagesPage() {
                             src={getPreviewSrc(page)}
                             className="w-full h-[calc(80vh-100px)] rounded-lg border border-white/10 bg-white"
                             title={`Preview: ${page.name}`}
+                            sandbox="allow-scripts"
+                            referrerPolicy="no-referrer"
                           />
                         </div>
                       </DialogContent>

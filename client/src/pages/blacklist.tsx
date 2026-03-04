@@ -128,7 +128,7 @@ export default function BlacklistPage() {
               <Shield className="w-8 h-8" />
               Blacklist Yönetimi
             </h2>
-            <p className="text-muted-foreground mt-1">IP adresleri ve User-Agent patternlerini engelleyin</p>
+            <p className="text-muted-foreground mt-1">IP/CIDR adreslerini ve User-Agent imzalarını engelleyin</p>
           </div>
         </div>
 
@@ -253,7 +253,7 @@ export default function BlacklistPage() {
               <CardHeader className="flex flex-row items-center justify-between gap-4">
                 <div>
                   <CardTitle>User-Agent Pattern Engelleme</CardTitle>
-                  <CardDescription>Bot imzalarını ve tarayıcı patternlerini engelleyin (regex destekli)</CardDescription>
+                  <CardDescription>Düz metin, wildcard (*, ?) ve eski regex girişleriyle bot imzalarını engelleyin</CardDescription>
                 </div>
                 <Dialog open={isUaDialogOpen} onOpenChange={setIsUaDialogOpen}>
                   <DialogTrigger asChild>
@@ -268,14 +268,14 @@ export default function BlacklistPage() {
                     </DialogHeader>
                     <div className="space-y-4 mt-4">
                       <div>
-                        <label className="text-sm text-muted-foreground">Pattern (Regex)</label>
+                        <label className="text-sm text-muted-foreground">Pattern</label>
                         <Input 
-                          placeholder=".*Googlebot.*|.*AdsBot.*" 
+                          placeholder="googlebot | adsbot | *headless*" 
                           value={newUa}
                           onChange={(e) => setNewUa(e.target.value)}
                           data-testid="input-new-ua"
                         />
-                        <p className="text-xs text-muted-foreground mt-1">Regex veya düz metin kullanabilirsiniz</p>
+                        <p className="text-xs text-muted-foreground mt-1">Örnek: googlebot, adsbot|bingbot, *python-requests*</p>
                       </div>
                       <div>
                         <label className="text-sm text-muted-foreground">Sebep (Opsiyonel)</label>
@@ -360,16 +360,16 @@ export default function BlacklistPage() {
               <CardContent>
                 <div className="flex flex-wrap gap-2">
                   {[
-                    { pattern: ".*Googlebot.*", label: "Googlebot" },
-                    { pattern: ".*AdsBot.*", label: "AdsBot" },
-                    { pattern: ".*facebookexternalhit.*", label: "Facebook" },
-                    { pattern: ".*Bingbot.*", label: "Bingbot" },
-                    { pattern: ".*HeadlessChrome.*", label: "Headless Chrome" },
-                    { pattern: ".*PhantomJS.*", label: "PhantomJS" },
-                    { pattern: ".*Selenium.*", label: "Selenium" },
-                    { pattern: ".*curl.*", label: "cURL" },
-                    { pattern: ".*wget.*", label: "Wget" },
-                    { pattern: ".*python-requests.*", label: "Python Requests" },
+                    { pattern: "googlebot", label: "Googlebot" },
+                    { pattern: "adsbot", label: "AdsBot" },
+                    { pattern: "facebookexternalhit", label: "Facebook" },
+                    { pattern: "bingbot", label: "Bingbot" },
+                    { pattern: "headlesschrome", label: "Headless Chrome" },
+                    { pattern: "phantomjs", label: "PhantomJS" },
+                    { pattern: "selenium", label: "Selenium" },
+                    { pattern: "curl", label: "cURL" },
+                    { pattern: "wget", label: "Wget" },
+                    { pattern: "python-requests", label: "Python Requests" },
                   ].map((item) => (
                     <Badge 
                       key={item.pattern}

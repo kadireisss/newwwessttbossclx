@@ -34,6 +34,11 @@ const needsSsl =
   connectionString.includes("supabase.co") ||
   connectionString.includes("aivencloud.com") ||
   isServerless;
+const allowInsecureSsl = process.env.DB_SSL_INSECURE === "true";
+
+if (needsSsl && allowInsecureSsl) {
+  console.warn("[db] DB_SSL_INSECURE=true, TLS certificate verification is disabled.");
+}
 
 export const pool = new Pool({
   connectionString,
@@ -41,7 +46,7 @@ export const pool = new Pool({
   idleTimeoutMillis: isServerless ? 10_000 : 30_000,
   connectionTimeoutMillis: 5_000,
   keepAlive: !isServerless,
-  ssl: needsSsl ? { rejectUnauthorized: false } : undefined,
+  ssl: needsSsl ? { rejectUnauthorized: !allowInsecureSsl } : undefined,
 });
 
 pool.on("error", (err) => {

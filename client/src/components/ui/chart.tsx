@@ -8,6 +8,19 @@ import { cn } from "@/lib/utils"
 // Format: { THEME_NAME: CSS_SELECTOR }
 const THEMES = { light: "", dark: ".dark" } as const
 
+function sanitizeCssIdentifier(value: string): string {
+  const sanitized = value.replace(/[^a-zA-Z0-9_-]/g, "")
+  return sanitized || "default"
+}
+
+function sanitizeCssColor(value: string): string | null {
+  const normalized = value.trim()
+  if (/^#([0-9a-fA-F]{3,8})$/.test(normalized)) return normalized
+  if (/^(rgb|rgba|hsl|hsla)\([0-9.,%\s+-]+\)$/i.test(normalized)) return normalized
+  if (/^(var\(--[a-zA-Z0-9_-]+\))$/.test(normalized)) return normalized
+  return null
+}
+
 export type ChartConfig = {
   [k in string]: {
     label?: React.ReactNode
@@ -44,7 +57,9 @@ const ChartContainer = React.forwardRef<
   }
 >(({ id, className, children, config, ...props }, ref) => {
   const uniqueId = React.useId()
-  const chartId = `chart-${id || uniqueId.replace(/:/g, "")}`
+  const chartId = sanitizeCssIdentifier(
+    `chart-${String(id || uniqueId).replace(/:/g, "")}`
+  )
 
   return (
     <ChartContext.Provider value={{ config }}>
@@ -82,13 +97,15 @@ const ChartStyle = ({ id, config }: { id: string; config: ChartConfig }) => {
         __html: Object.entries(THEMES)
           .map(
             ([theme, prefix]) => `
-${prefix} [data-chart=${id}] {
+${prefix} [data-chart="${id}"] {
 ${colorConfig
   .map(([key, itemConfig]) => {
+    const safeKey = sanitizeCssIdentifier(key)
     const color =
       itemConfig.theme?.[theme as keyof typeof itemConfig.theme] ||
       itemConfig.color
-    return color ? `  --color-${key}: ${color};` : null
+    const safeColor = color ? sanitizeCssColor(color) : null
+    return safeColor ? `  --color-${safeKey}: ${safeColor};` : null
   })
   .join("\n")}
 }
@@ -188,11 +205,11 @@ const ChartTooltipContent = React.forwardRef<
           {payload.map((item, index) => {
             const key = `${nameKey || item.name || item.dataKey || "value"}`
             const itemConfig = getPayloadConfigFromPayload(config, item, key)
-            const indicatorColor = color || item.payload.fill || item.color
+            const indicatorColor = color || item.payload?.fill || item.color
 
             return (
               <div
-                key={item.dataKey}
+                key={item.dataKey ?? `item-${index}`}
                 className={cn(
                   "flex w-full flex-wrap items-stretch gap-2 [&>svg]:h-2.5 [&>svg]:w-2.5 [&>svg]:text-muted-foreground",
                   indicator === "dot" && "items-center"
@@ -285,13 +302,13 @@ const ChartLegendContent = React.forwardRef<
           className
         )}
       >
-        {payload.map((item) => {
+        {payload.map((item, index) => {
           const key = `${nameKey || item.dataKey || "value"}`
           const itemConfig = getPayloadConfigFromPayload(config, item, key)
 
           return (
             <div
-              key={item.value}
+              key={`${item.dataKey ?? "legend"}-${index}`}
               className={cn(
                 "flex items-center gap-1.5 [&>svg]:h-3 [&>svg]:w-3 [&>svg]:text-muted-foreground"
               )}

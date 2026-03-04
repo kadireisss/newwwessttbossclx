@@ -5,8 +5,8 @@ import Layout from "@/components/layout";
 import { StatsCard } from "@/components/ui/card-stats";
 import { cn } from "@/lib/utils";
 import {
-  ShieldAlert, Users, Eye, Activity, Globe, TrendingUp,
-  Clock, CheckCircle2, XCircle, Zap, ArrowUpRight, ArrowDownRight,
+  ShieldAlert, Users, Eye, Activity, Globe,
+  Clock, CheckCircle2, XCircle, Zap,
   Shield, CalendarDays, Radio, Wifi, WifiOff, RefreshCw
 } from "lucide-react";
 import {

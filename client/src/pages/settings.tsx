@@ -71,8 +71,8 @@ export default function SettingsPage() {
       setConfirmPassword("");
       toast({ title: "Şifre değiştirildi", description: "Yeni şifreniz aktif." });
     },
-    onError: (error: any) => {
-      toast({ title: "Hata", description: error.message || "Şifre değiştirilemedi.", variant: "destructive" });
+    onError: () => {
+      toast({ title: "Hata", description: "Şifre değiştirilemedi.", variant: "destructive" });
     }
   });
 

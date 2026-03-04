@@ -325,7 +325,7 @@ export default function LogsPage() {
                                       </div>
                                       <div>
                                         <label className="text-xs text-muted-foreground">Hedef</label>
-                                        <p className="text-sm">{selectedLog.destination}</p>
+                                        <p className="text-sm">{selectedLog.destination ?? "-"}</p>
                                       </div>
                                       {selectedLog.clickId && (
                                         <div>
@@ -342,7 +342,7 @@ export default function LogsPage() {
                                       <label className="text-xs text-muted-foreground">Tespit Sebepleri</label>
                                       <div className="flex flex-wrap gap-1 mt-1">
                                         {parseReasons(selectedLog.botReasons).map((reason: string, i: number) => (
-                                          <Badge key={i} variant="outline" className="text-xs">{reason}</Badge>
+                                          <Badge key={`reason-${i}-${reason}`} variant="outline" className="text-xs">{reason}</Badge>
                                         ))}
                                         {parseReasons(selectedLog.botReasons).length === 0 && (
                                           <span className="text-muted-foreground text-sm">-</span>
@@ -355,7 +355,7 @@ export default function LogsPage() {
                             </Dialog>
                             <Button
                               size="icon" variant="ghost"
-                              onClick={() => addToBlacklistMutation.mutate(log.ipAddress || "")}
+                              onClick={() => { if (log.ipAddress) addToBlacklistMutation.mutate(log.ipAddress); }}
                               disabled={addToBlacklistMutation.isPending}
                               title="IP'yi engelle"
                             >

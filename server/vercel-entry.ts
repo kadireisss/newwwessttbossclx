@@ -3,9 +3,10 @@ import express, { type Request, Response, NextFunction } from "express";
 import session from "express-session";
 import connectPgSimple from "connect-pg-simple";
 import compression from "compression";
+import helmet from "helmet";
 import { isDatabaseConfigured, pool } from "./db";
 import { registerRoutes } from "./routes";
-import crypto from "crypto";
+import { enforceSameOrigin, getSessionSecret } from "./security";
 
 declare module "express-session" {
   interface SessionData {
@@ -17,19 +18,19 @@ declare module "express-session" {
 const app = express();
 
 app.disable("x-powered-by");
-app.set("trust proxy", 1);
+app.set("trust proxy", true);
 
-app.use((_req: Request, res: Response, next: NextFunction) => {
-  res.setHeader("X-Frame-Options", "DENY");
-  res.setHeader("X-Content-Type-Options", "nosniff");
-  res.setHeader("Referrer-Policy", "no-referrer");
-  res.setHeader("X-XSS-Protection", "1; mode=block");
-  next();
-});
+app.use(
+  helmet({
+    contentSecurityPolicy: false,
+    crossOriginEmbedderPolicy: false,
+  }),
+);
 
 app.use(compression());
 app.use(express.json({ limit: "5mb" }));
 app.use(express.urlencoded({ extended: false }));
+app.use(enforceSameOrigin);
 
 if (!isDatabaseConfigured) {
   app.use((_req: Request, res: Response) => {
@@ -40,33 +41,50 @@ if (!isDatabaseConfigured) {
   });
 } else {
   const PgStore = connectPgSimple(session);
-  const sessionSecret =
-    process.env.SESSION_SECRET || crypto.randomBytes(48).toString("hex");
+  const secureCookies =
+    process.env.NODE_ENV === "production" &&
+    process.env.FORCE_INSECURE_COOKIE !== "true";
 
-  const sessionMiddleware = session({
-    store: new PgStore({
-      pool: pool as any,
-      tableName: "user_sessions",
-      createTableIfMissing: true,
-      pruneSessionInterval: false,
-      errorLog: (err: Error) => {
-        console.error("[session-store]", err.message);
+  let sessionSecret: string | null = null;
+  try {
+    sessionSecret = getSessionSecret();
+  } catch (error: any) {
+    console.error("[session-config]", error?.message || error);
+  }
+
+  if (!sessionSecret) {
+    app.use((_req: Request, res: Response) => {
+      res.status(500).json({
+        error: "Session is not configured securely",
+        hint: "Set SESSION_SECRET (minimum 32 chars) in environment variables",
+      });
+    });
+  } else {
+    const sessionMiddleware = session({
+      store: new PgStore({
+        pool: pool as any,
+        tableName: "user_sessions",
+        createTableIfMissing: true,
+        pruneSessionInterval: 60,
+        errorLog: (err: Error) => {
+          console.error("[session-store]", err.message);
+        },
+      }),
+      secret: sessionSecret,
+      name: "__sid",
+      resave: false,
+      saveUninitialized: false,
+      cookie: {
+        secure: secureCookies,
+        httpOnly: true,
+        maxAge: 24 * 60 * 60 * 1000,
+        sameSite: "strict",
       },
-    }),
-    secret: sessionSecret,
-    name: "__sid",
-    resave: false,
-    saveUninitialized: false,
-    cookie: {
-      secure: process.env.FORCE_INSECURE_COOKIE !== "true",
-      httpOnly: true,
-      maxAge: 24 * 60 * 60 * 1000,
-      sameSite: "lax",
-    },
-  });
+    });
 
-  // Avoid DB-backed session lookup on public pages like /maintenance and /r/:slug.
-  app.use("/api", sessionMiddleware);
+    // Avoid DB-backed session lookup on public pages like /maintenance and /r/:slug.
+    app.use("/api", sessionMiddleware);
+  }
 
   app.get("/api/health", async (_req: Request, res: Response) => {
     try {

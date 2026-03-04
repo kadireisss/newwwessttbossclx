@@ -27,6 +27,12 @@ interface UseLiveFeedOptions {
 
 const WS_MAX_RETRIES = 2;
 const POLL_INTERVAL = 5000;
+const devLog = (...args: unknown[]) => {
+  if (import.meta.env.DEV) console.log(...args);
+};
+const devError = (...args: unknown[]) => {
+  if (import.meta.env.DEV) console.error(...args);
+};
 
 export function useLiveFeed(options: UseLiveFeedOptions = {}) {
   const { enabled = true, maxLogs = 50, onNewLog } = options;
@@ -50,7 +56,7 @@ export function useLiveFeed(options: UseLiveFeedOptions = {}) {
   const startPolling = useCallback(() => {
     if (pollIntervalRef.current) return;
     
-    console.log('[LiveFeed] Starting polling mode');
+    devLog('[LiveFeed] Starting polling mode');
     setMode('polling');
     setIsConnected(true);
 
@@ -86,7 +92,7 @@ export function useLiveFeed(options: UseLiveFeedOptions = {}) {
           });
         }
       } catch (e) {
-        console.error('[LiveFeed] Poll error:', e);
+        devError('[LiveFeed] Poll error:', e);
       }
     };
 
@@ -107,7 +113,7 @@ export function useLiveFeed(options: UseLiveFeedOptions = {}) {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const url = `${protocol}//${window.location.host}/ws/live`;
     
-    console.log(`[LiveFeed] WS attempt ${wsRetriesRef.current + 1}/${WS_MAX_RETRIES + 1}`);
+    devLog(`[LiveFeed] WS attempt ${wsRetriesRef.current + 1}/${WS_MAX_RETRIES + 1}`);
     setMode('connecting');
 
     try {
@@ -176,7 +182,7 @@ export function useLiveFeed(options: UseLiveFeedOptions = {}) {
               break;
           }
         } catch (e) {
-          console.error('[LiveFeed] Parse error:', e);
+          devError('[LiveFeed] Parse error:', e);
         }
       };
     } catch {

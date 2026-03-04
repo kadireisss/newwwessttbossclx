@@ -3,6 +3,20 @@ import { relations } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
+const safeHttpUrlSchema = z
+  .string()
+  .trim()
+  .url()
+  .max(2048)
+  .refine((value) => {
+    try {
+      const parsed = new URL(value);
+      return parsed.protocol === "http:" || parsed.protocol === "https:";
+    } catch {
+      return false;
+    }
+  }, "Only http/https URLs are allowed");
+
 // === TABLE DEFINITIONS ===
 
 export const users = pgTable("users", {
@@ -135,9 +149,17 @@ export const accessLogsRelations = relations(accessLogs, ({ one }) => ({
 // === SCHEMAS ===
 export const insertUserSchema = createInsertSchema(users).omit({ id: true, createdAt: true, lastLogin: true });
 export const insertLandingPageSchema = createInsertSchema(landingPages).omit({ id: true, createdAt: true, updatedAt: true });
-export const insertDomainSchema = createInsertSchema(domains).omit({ id: true, createdAt: true, updatedAt: true, totalClicks: true, botClicks: true, realClicks: true });
+export const insertDomainSchema = createInsertSchema(domains)
+  .omit({ id: true, createdAt: true, updatedAt: true, totalClicks: true, botClicks: true, realClicks: true })
+  .extend({
+    targetUrl: safeHttpUrlSchema,
+  });
 export const insertIpBlacklistSchema = createInsertSchema(ipBlacklist).omit({ id: true, addedAt: true });
-export const insertUABlacklistSchema = createInsertSchema(userAgentBlacklist).omit({ id: true, addedAt: true });
+export const insertUABlacklistSchema = createInsertSchema(userAgentBlacklist)
+  .omit({ id: true, addedAt: true })
+  .extend({
+    pattern: z.string().trim().min(1).max(128),
+  });
 export const insertSettingsSchema = createInsertSchema(settings).omit({ id: true, updatedAt: true });
 export const insertRateLimitSchema = createInsertSchema(rateLimits).omit({ id: true, firstClick: true, lastClick: true });
 export const insertChallengeTokenSchema = createInsertSchema(challengeTokens).omit({ id: true, createdAt: true });

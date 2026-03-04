@@ -1,6 +1,7 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import type { Server } from 'http';
 import type { IncomingMessage } from 'http';
+import { pool } from './db';
 
 // ============================================
 // WEBSOCKET MANAGER - Canlı Akış Sistemi
@@ -36,7 +37,7 @@ class WebSocketManager {
     });
 
     this.wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
-      this.handleConnection(ws, req);
+      void this.handleConnection(ws, req);
     });
 
     // Heartbeat - bağlantı kontrolü
@@ -45,10 +46,48 @@ class WebSocketManager {
     console.log('[WS] WebSocket server initialized on /ws/live');
   }
 
-  private handleConnection(ws: WebSocket, req: IncomingMessage) {
-    // Cookie'den session kontrolü (basit auth check)
-    const cookies = req.headers.cookie || '';
-    const hasSession = cookies.includes('__sid=');
+  private extractSessionId(cookieHeader: string): string | null {
+    const match = cookieHeader.match(/(?:^|;\s*)__sid=([^;]+)/);
+    if (!match) return null;
+
+    let raw = "";
+    try {
+      raw = decodeURIComponent(match[1]);
+    } catch {
+      return null;
+    }
+    if (!raw) return null;
+
+    // express-session signed cookie format: s:<sessionId>.<signature>
+    if (raw.startsWith("s:")) {
+      const unsignedPart = raw.slice(2);
+      const dotIdx = unsignedPart.lastIndexOf(".");
+      if (dotIdx > 0) return unsignedPart.slice(0, dotIdx);
+      return null;
+    }
+
+    return raw;
+  }
+
+  private async hasValidSession(cookieHeader: string): Promise<boolean> {
+    const sid = this.extractSessionId(cookieHeader);
+    if (!sid) return false;
+
+    try {
+      const result = await pool.query(
+        "SELECT 1 FROM user_sessions WHERE sid = $1 AND expire > NOW() LIMIT 1",
+        [sid],
+      );
+      return (result.rowCount ?? 0) > 0;
+    } catch (error: any) {
+      console.error("[WS] Session check failed:", error?.message || error);
+      return false;
+    }
+  }
+
+  private async handleConnection(ws: WebSocket, req: IncomingMessage) {
+    const cookieHeader = typeof req.headers.cookie === "string" ? req.headers.cookie : "";
+    const hasSession = await this.hasValidSession(cookieHeader);
 
     const client: LiveClient = {
       ws,

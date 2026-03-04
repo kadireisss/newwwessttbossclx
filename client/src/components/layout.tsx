@@ -136,7 +136,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
               onClick={() => logout()}
             >
               <LogOut className="w-4 h-4" />
-              Sign Out
+              Çıkış Yap
             </Button>
           </div>
         </aside>
