@@ -5,17 +5,26 @@ import * as schema from "../shared/schema";
 const { Pool } = pg;
 
 if (!process.env.DATABASE_URL) {
-  throw new Error("DATABASE_URL must be set. Did you forget to provision a database?");
+  console.error("WARNING: DATABASE_URL is not set. Database operations will fail.");
 }
 
 const isServerless = !process.env.PORT && process.env.VERCEL === "1";
+const connectionString = process.env.DATABASE_URL || "postgresql://localhost:5432/placeholder";
+
+const needsSsl =
+  connectionString.includes("sslmode=require") ||
+  connectionString.includes("neon.tech") ||
+  connectionString.includes("supabase.co") ||
+  connectionString.includes("aivencloud.com") ||
+  isServerless;
 
 export const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
+  connectionString,
   max: isServerless ? 5 : 20,
   idleTimeoutMillis: isServerless ? 10_000 : 30_000,
   connectionTimeoutMillis: 5_000,
   keepAlive: !isServerless,
+  ssl: needsSsl ? { rejectUnauthorized: false } : undefined,
 });
 
 pool.on("error", (err) => {
