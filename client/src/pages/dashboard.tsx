@@ -37,7 +37,7 @@ export default function DashboardPage() {
     clientCount 
   } = useLiveFeed({ 
     enabled: liveEnabled,
-    maxLogs: 10,
+    maxLogs: 25,
   });
 
   // Son aktivite - canlı logları önce göster, sonra API'den gelenleri
@@ -221,6 +221,124 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
 
+        {/* ===== CANLI AKIŞ - ÜST BÖLÜM ===== */}
+        <Card className={cn(
+          "glass-panel transition-all duration-300",
+          liveEnabled && isConnected && "ring-1 ring-primary/30"
+        )}>
+          <CardHeader className="flex flex-row items-center justify-between gap-4 pb-3">
+            <div className="flex items-center gap-3">
+              <div className={cn(
+                "p-2 rounded-lg",
+                isConnected ? "bg-primary/20" : "bg-muted/20"
+              )}>
+                <Radio className={cn(
+                  "w-5 h-5",
+                  isConnected ? "text-primary animate-pulse" : "text-muted-foreground"
+                )} />
+              </div>
+              <div>
+                <CardTitle className="font-display flex items-center gap-2">
+                  Canlı Trafik Akışı
+                  {liveEnabled && isConnected && (
+                    <Badge variant="outline" className="text-[10px] border-primary/50 text-primary animate-pulse">
+                      CANLI
+                    </Badge>
+                  )}
+                </CardTitle>
+                <CardDescription>
+                  {mode === 'polling' ? "5 saniyede bir güncelleniyor" : isConnected ? "Anlık güncelleniyor" : "Bağlanıyor..."}
+                </CardDescription>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              {isConnected && liveStats.liveTotal > 0 && (
+                <div className="hidden sm:flex items-center gap-4 mr-4 text-sm">
+                  <span className="font-mono font-bold">+{liveStats.liveTotal}</span>
+                  <span className="text-primary font-mono">{liveStats.liveReal} <span className="text-[10px] text-muted-foreground">user</span></span>
+                  <span className="text-destructive font-mono">{liveStats.liveBots} <span className="text-[10px] text-muted-foreground">bot</span></span>
+                  <Button variant="ghost" size="sm" onClick={resetStats} className="text-xs h-7 px-2">
+                    <RefreshCw className="w-3 h-3" />
+                  </Button>
+                </div>
+              )}
+              <Link href="/logs">
+                <Button variant="ghost" size="sm">Tüm Loglar</Button>
+              </Link>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-2 max-h-[480px] overflow-y-auto pr-1">
+              {combinedLogs.length === 0 ? (
+                <div className="text-center py-12">
+                  <Activity className="w-10 h-10 mx-auto text-muted-foreground/30 mb-3" />
+                  <p className="text-sm text-muted-foreground">Henüz trafik yok. Domain ekleyip link paylaşınca burada canlı görünecek.</p>
+                </div>
+              ) : (
+                combinedLogs.slice(0, 15).map((log, index) => {
+                  const reasons = (() => {
+                    try { return JSON.parse(log.botReasons || '[]'); } catch { return []; }
+                  })();
+                  const mainReason = reasons[0]?.replace(/_/g, ' ') || '';
+                  const isNew = liveEnabled && index < liveStats.liveTotal;
+
+                  return (
+                    <div
+                      key={log.id}
+                      className={cn(
+                        "flex items-center justify-between p-3 rounded-lg bg-black/20 border border-white/5 hover:border-white/10 transition-all duration-300",
+                        isNew && "animate-in slide-in-from-top-2 fade-in border-primary/30 bg-primary/5"
+                      )}
+                    >
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className={cn(
+                          "w-2 h-2 rounded-full shrink-0 transition-all",
+                          log.isBot
+                            ? "bg-destructive shadow-[0_0_8px_rgba(239,68,68,0.5)]"
+                            : "bg-primary shadow-[0_0_8px_rgba(16,185,129,0.5)]",
+                          isNew && "animate-ping"
+                        )} />
+                        <div className="min-w-0">
+                          <p className="text-sm font-mono font-medium">{log.ipAddress}</p>
+                          <p className="text-xs text-muted-foreground truncate">
+                            {log.isBot && mainReason ? mainReason : ((log as any).domain || log.userAgent?.substring(0, 50) || 'Bilinmiyor')}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="text-right shrink-0 flex items-center gap-2">
+                        {log.botScore != null && (
+                          <span className={cn(
+                            "text-[10px] font-mono hidden sm:inline",
+                            log.botScore >= 50 ? "text-destructive" : "text-primary"
+                          )}>
+                            {log.botScore}pt
+                          </span>
+                        )}
+                        <Badge
+                          variant={log.isBot ? "destructive" : "default"}
+                          className={cn(
+                            "text-[10px] h-5 px-1.5 uppercase",
+                            isNew && "animate-pulse"
+                          )}
+                        >
+                          {log.isBot ? "BOT" : "USER"}
+                        </Badge>
+                        <span className="text-[10px] text-muted-foreground w-16 text-right">
+                          {isNew ? (
+                            <span className="text-primary">az önce</span>
+                          ) : (
+                            log.createdAt && formatDistanceToNow(new Date(log.createdAt), { addSuffix: true })
+                          )}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </CardContent>
+        </Card>
+
         {/* Main Stats */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
           <StatsCard
@@ -320,158 +438,65 @@ export default function DashboardPage() {
           </Card>
         </div>
 
-        {/* Domain Stats + Recent Activity */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Domain Performance Table */}
-          <Card className="glass-panel">
-            <CardHeader className="flex flex-row items-center justify-between gap-4">
-              <div>
-                <CardTitle className="font-display">Domain Performansı</CardTitle>
-                <CardDescription>Tıklama istatistikleri</CardDescription>
-              </div>
-              <Link href="/domains">
-                <Button variant="ghost" size="sm">Yönet</Button>
-              </Link>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-3">
-                {!domains || domains.length === 0 ? (
-                  <div className="text-center py-8">
-                    <Globe className="w-12 h-12 mx-auto text-muted-foreground mb-2 opacity-50" />
-                    <p className="text-sm text-muted-foreground">Henüz domain eklenmemiş.</p>
-                    <Link href="/domains">
-                      <Button variant="outline" size="sm" className="mt-4">Domain Ekle</Button>
-                    </Link>
-                  </div>
-                ) : (
-                  domains.slice(0, 6).map((domain) => {
-                    const total = (domain as any).totalClicks || 0;
-                    const bots = (domain as any).botClicks || 0;
-                    const real = (domain as any).realClicks || 0;
-                    const botRate = total > 0 ? Math.round((bots / total) * 100) : 0;
+        {/* Domain Performance */}
+        <Card className="glass-panel">
+          <CardHeader className="flex flex-row items-center justify-between gap-4">
+            <div>
+              <CardTitle className="font-display">Domain Performansı</CardTitle>
+              <CardDescription>Tıklama istatistikleri</CardDescription>
+            </div>
+            <Link href="/domains">
+              <Button variant="ghost" size="sm">Yönet</Button>
+            </Link>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+              {!domains || domains.length === 0 ? (
+                <div className="text-center py-8 col-span-full">
+                  <Globe className="w-12 h-12 mx-auto text-muted-foreground mb-2 opacity-50" />
+                  <p className="text-sm text-muted-foreground">Henüz domain eklenmemiş.</p>
+                  <Link href="/domains">
+                    <Button variant="outline" size="sm" className="mt-4">Domain Ekle</Button>
+                  </Link>
+                </div>
+              ) : (
+                domains.map((domain) => {
+                  const total = (domain as any).totalClicks || 0;
+                  const bots = (domain as any).botClicks || 0;
+                  const real = (domain as any).realClicks || 0;
+                  const botRate = total > 0 ? Math.round((bots / total) * 100) : 0;
 
-                    return (
-                      <div key={domain.id} className="flex items-center justify-between p-3 rounded-lg bg-black/20 border border-white/5 hover:border-white/10 transition-colors">
-                        <div className="flex items-center gap-3 min-w-0">
-                          {domain.redirectEnabled ? (
-                            <CheckCircle2 className="w-4 h-4 text-primary shrink-0" />
-                          ) : (
-                            <XCircle className="w-4 h-4 text-muted-foreground shrink-0" />
-                          )}
-                          <div className="min-w-0">
-                            <p className="text-sm font-medium truncate">{domain.domain}</p>
-                            <div className="flex items-center gap-3 text-xs text-muted-foreground">
-                              <span className="text-primary">{real} kullanıcı</span>
-                              <span className="text-destructive">{bots} bot</span>
-                            </div>
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-2 shrink-0">
-                          <span className="text-sm font-mono font-bold">{total}</span>
-                          {botRate > 0 && (
-                            <Badge variant={botRate > 60 ? "destructive" : "secondary"} className="text-[10px] h-5">
-                              {botRate}% bot
-                            </Badge>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })
-                )}
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* Recent Activity - LIVE */}
-          <Card className={cn(
-            "glass-panel transition-all duration-300",
-            liveEnabled && isConnected && "ring-1 ring-primary/30"
-          )}>
-            <CardHeader className="flex flex-row items-center justify-between gap-4">
-              <div className="flex items-center gap-2">
-                <CardTitle className="font-display">Son Aktivite</CardTitle>
-                {liveEnabled && isConnected && (
-                  <Badge variant="outline" className="text-[10px] border-primary/50 text-primary animate-pulse">
-                    <Radio className="w-2.5 h-2.5 mr-1" />
-                    CANLI
-                  </Badge>
-                )}
-              </div>
-              <Link href="/logs">
-                <Button variant="ghost" size="sm">Tümünü Gör</Button>
-              </Link>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-3">
-                {combinedLogs.length === 0 ? (
-                  <p className="text-sm text-muted-foreground text-center py-8">Henüz aktivite yok.</p>
-                ) : (
-                  combinedLogs.slice(0, 6).map((log, index) => {
-                    const reasons = (() => {
-                      try { return JSON.parse(log.botReasons || '[]'); } catch { return []; }
-                    })();
-                    const mainReason = reasons[0]?.replace(/_/g, ' ') || '';
-                    const isNew = liveEnabled && index < liveStats.liveTotal;
-
-                    return (
-                      <div 
-                        key={log.id} 
-                        className={cn(
-                          "flex items-center justify-between p-3 rounded-lg bg-black/20 border border-white/5 hover:border-white/10 transition-all duration-300",
-                          isNew && "animate-in slide-in-from-top-2 fade-in border-primary/30 bg-primary/5"
+                  return (
+                    <div key={domain.id} className="flex items-center justify-between p-3 rounded-lg bg-black/20 border border-white/5 hover:border-white/10 transition-colors">
+                      <div className="flex items-center gap-3 min-w-0">
+                        {domain.redirectEnabled ? (
+                          <CheckCircle2 className="w-4 h-4 text-primary shrink-0" />
+                        ) : (
+                          <XCircle className="w-4 h-4 text-muted-foreground shrink-0" />
                         )}
-                      >
-                        <div className="flex items-center gap-3 min-w-0">
-                          <div className={cn(
-                            "w-2 h-2 rounded-full shrink-0 transition-all",
-                            log.isBot 
-                              ? "bg-destructive shadow-[0_0_8px_rgba(239,68,68,0.5)]" 
-                              : "bg-primary shadow-[0_0_8px_rgba(16,185,129,0.5)]",
-                            isNew && "animate-ping"
-                          )} />
-                          <div className="min-w-0">
-                            <p className="text-sm font-mono font-medium">{log.ipAddress}</p>
-                            <p className="text-xs text-muted-foreground truncate">
-                              {log.isBot && mainReason ? mainReason : ((log as any).domain || log.userAgent?.substring(0, 40) || 'Bilinmiyor')}
-                            </p>
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium truncate">{domain.domain}</p>
+                          <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                            <span className="text-primary">{real} kullanıcı</span>
+                            <span className="text-destructive">{bots} bot</span>
                           </div>
-                        </div>
-                        <div className="text-right shrink-0">
-                          <div className="flex items-center gap-1.5">
-                            {log.botScore != null && (
-                              <span className={cn(
-                                "text-[10px] font-mono",
-                                log.botScore >= 50 ? "text-destructive" : "text-primary"
-                              )}>
-                                {log.botScore}
-                              </span>
-                            )}
-                            <Badge 
-                              variant={log.isBot ? "destructive" : "default"} 
-                              className={cn(
-                                "text-[10px] h-5 px-1.5 uppercase",
-                                isNew && "animate-pulse"
-                              )}
-                            >
-                              {log.isBot ? "BOT" : "USER"}
-                            </Badge>
-                          </div>
-                          <p className="text-[10px] text-muted-foreground mt-1">
-                            {isNew ? (
-                              <span className="text-primary">az önce</span>
-                            ) : (
-                              log.createdAt && formatDistanceToNow(new Date(log.createdAt), { addSuffix: true })
-                            )}
-                          </p>
                         </div>
                       </div>
-                    );
-                  })
-                )}
-              </div>
-            </CardContent>
-          </Card>
-        </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <span className="text-sm font-mono font-bold">{total}</span>
+                        {botRate > 0 && (
+                          <Badge variant={botRate > 60 ? "destructive" : "secondary"} className="text-[10px] h-5">
+                            {botRate}% bot
+                          </Badge>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </CardContent>
+        </Card>
       </div>
     </Layout>
   );
