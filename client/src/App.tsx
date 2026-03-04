@@ -5,6 +5,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useAuth } from "@/hooks/use-auth";
 import { useEffect } from "react";
+import { Analytics } from "@vercel/analytics/react";
 
 // Pages
 import LoginPage from "@/pages/login";
@@ -75,6 +76,7 @@ function App() {
       <TooltipProvider>
         <Toaster />
         <Router />
+        <Analytics />
       </TooltipProvider>
     </QueryClientProvider>
   );
