@@ -141,7 +141,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       req.session.username = user.username;
       const { password: _, ...safeUser } = user;
       res.json(safeUser);
-    } catch { res.status(400).json({ message: "Geçersiz giriş" }); }
+    } catch (error: any) {
+      console.error("[auth/login]", error?.message || error);
+      const msg = String(error?.message || "");
+      if (msg.includes("does not exist") || msg.includes("relation")) {
+        return res.status(503).json({
+          message: "Database schema is not initialized. Run `npm run db:push` with your production DATABASE_URL.",
+        });
+      }
+      return res.status(500).json({ message: "Login failed" });
+    }
   });
 
   app.get(api.auth.me.path, async (req, res) => {

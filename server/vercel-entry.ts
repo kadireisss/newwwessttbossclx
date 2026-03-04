@@ -71,7 +71,19 @@ if (!isDatabaseConfigured) {
   app.get("/api/health", async (_req: Request, res: Response) => {
     try {
       await pool.query("SELECT 1");
-      res.json({ status: "ok", db: "connected" });
+      const schemaCheck = await pool.query(
+        "SELECT to_regclass('public.users') AS users_table",
+      );
+      const schemaReady = Boolean(schemaCheck.rows?.[0]?.users_table);
+      if (!schemaReady) {
+        return res.status(503).json({
+          status: "error",
+          db: "connected",
+          schema: "missing",
+          message: "Database schema is missing. Run `npm run db:push` against production DATABASE_URL.",
+        });
+      }
+      res.json({ status: "ok", db: "connected", schema: "ready" });
     } catch (e: any) {
       res.status(503).json({ status: "error", db: "disconnected", message: e?.message });
     }
