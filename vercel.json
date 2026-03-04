@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "buildCommand": "vite build && npx esbuild server/vercel-entry.ts --bundle --platform=node --target=node20 --format=esm --outfile=api/index.mjs --packages=external",
+  "buildCommand": "npx tsx script/migrate.ts && vite build && npx esbuild server/vercel-entry.ts --bundle --platform=node --target=node20 --format=esm --outfile=api/index.mjs --packages=external",
   "outputDirectory": "dist/public",
   "framework": null,
   "functions": {
