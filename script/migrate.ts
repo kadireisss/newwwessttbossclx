@@ -134,24 +134,22 @@ CREATE INDEX IF NOT EXISTS idx_session_expire ON user_sessions(expire);
 await client.query(sql);
 console.log("All tables created successfully!");
 
-// Seed admin user
+// Seed admin user -- always upsert so password stays in sync with env var
 const adminPassword = process.env.ADMIN_PASSWORD || "boss_admin_123";
 const { default: bcrypt } = await import("bcryptjs");
+const hash = await bcrypt.hash(adminPassword, 12);
 const existing = await client.query("SELECT id FROM users WHERE username = 'admin'");
 if (existing.rows.length === 0) {
-  const hash = await bcrypt.hash(adminPassword, 12);
   await client.query(
     "INSERT INTO users (username, password, email) VALUES ('admin', $1, 'admin@boss.local')",
     [hash],
   );
-  console.log("Admin user created. Password:", adminPassword);
-} else if (process.env.ADMIN_PASSWORD) {
-  const hash = await bcrypt.hash(adminPassword, 12);
-  await client.query("UPDATE users SET password = $1 WHERE username = 'admin'", [hash]);
-  console.log("Admin password updated from ADMIN_PASSWORD env var.");
+  console.log("Admin user created.");
 } else {
-  console.log("Admin user already exists, skipping seed.");
+  await client.query("UPDATE users SET password = $1 WHERE username = 'admin'", [hash]);
+  console.log("Admin password synced.");
 }
+console.log("Login with => username: admin");
 
 await client.end();
 console.log("Done.");
