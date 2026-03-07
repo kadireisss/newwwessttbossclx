@@ -8,6 +8,8 @@ import { users } from "../shared/schema";
 import { eq } from "drizzle-orm";
 import bcrypt from "bcryptjs";
 import { wsManager } from "./websocket";
+import { fromZodError } from "zod-validation-error";
+import { ZodError } from "zod";
 import {
   clamp,
   escapeHtmlAttribute,
@@ -327,6 +329,46 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     });
   });
 
+  // === HELPER: Detect country from proxy/CDN headers ===
+  const detectCountry = (req: Request): string | null => {
+    const candidates = [
+      req.headers['cf-ipcountry'],        // Cloudflare
+      req.headers['x-vercel-ip-country'],  // Vercel
+      req.headers['x-country-code'],       // Generic proxy
+    ];
+    for (const c of candidates) {
+      if (typeof c === 'string' && /^[A-Z]{2}$/i.test(c.trim())) {
+        return c.trim().toUpperCase();
+      }
+    }
+    return null;
+  };
+
+  // === HELPER: Inject CSS/JS into landing page HTML ===
+  const injectLandingAssets = (html: string, css?: string | null, js?: string | null): string => {
+    let result = html;
+    const injection: string[] = [];
+    if (css) injection.push(`<style>${css}</style>`);
+    if (js) injection.push(`<script>${js}</script>`);
+    if (injection.length === 0) return result;
+    const injectionStr = injection.join('\n');
+    // Inject before </head> if present, otherwise before </body>, otherwise append
+    if (result.includes('</head>')) {
+      result = result.replace('</head>', `${injectionStr}\n</head>`);
+    } else if (result.includes('</body>')) {
+      result = result.replace('</body>', `${injectionStr}\n</body>`);
+    } else {
+      result += injectionStr;
+    }
+    return result;
+  };
+
+  // === HELPER: Build full landing page response ===
+  const buildLandingHtml = (page?: { htmlContent: string; cssContent?: string | null; jsContent?: string | null }): string => {
+    if (!page) return '<!DOCTYPE html><html><body><h1>Welcome</h1></body></html>';
+    return injectLandingAssets(page.htmlContent, page.cssContent, page.jsContent);
+  };
+
   // === CLOAKER ENGINE ===
   const showLandingPage = async (req: Request, res: any, domain: any, ip: string, ua: string, reason: string, score = 0, clickId?: string) => {
     const page = domain.landingPageId
@@ -334,9 +376,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       : undefined;
     const referer = typeof (req.headers['referer'] || req.headers['referrer'] || '') === 'string'
       ? (req.headers['referer'] || req.headers['referrer'] || '').toString().trim() : '';
+    const country = detectCountry(req);
     const log = await storage.createAccessLog({
       domainId: domain.id, ipAddress: ip, userAgent: ua,
       referer: referer || null,
+      country: country || null,
       isBot: true, botScore: score, botReasons: JSON.stringify([reason]),
       destination: 'landing', clickId,
       headers: JSON.stringify(sanitizeHeadersForLogs(req.headers))
@@ -348,11 +392,32 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     wsManager.broadcastDomainClick(domain.id, true);
     
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    return res.send(page?.htmlContent || '<!DOCTYPE html><html><body><h1>Welcome</h1></body></html>');
+    return res.send(buildLandingHtml(page));
   };
 
-  const performRedirect = (res: any, targetUrl: string, mode: string) => {
-    const normalizedTarget = (targetUrl || "").trim();
+  // === HELPER: Merge query params onto target URL ===
+  const mergeQueryParams = (targetUrl: string, reqQuery: Record<string, any>): string => {
+    try {
+      const url = new URL(targetUrl);
+      // Forward all query params except internal ones (vt, tz, sr, pl, dpr)
+      const internalParams = new Set(['vt', 'tz', 'sr', 'pl', 'dpr']);
+      for (const [key, value] of Object.entries(reqQuery)) {
+        if (internalParams.has(key)) continue;
+        if (typeof value !== 'string') continue;
+        if (!url.searchParams.has(key)) {
+          url.searchParams.set(key, value);
+        }
+      }
+      return url.toString();
+    } catch {
+      return targetUrl;
+    }
+  };
+
+  const performRedirect = (req: Request, res: any, targetUrl: string, mode: string) => {
+    // Merge original query params (UTM, gclid, fbclid, etc.) onto target URL
+    const mergedTarget = mergeQueryParams(targetUrl, req.query);
+    const normalizedTarget = (mergedTarget || "").trim();
     if (!isSafeHttpUrl(normalizedTarget)) {
       res.setHeader("Content-Type", "text/html; charset=utf-8");
       return res.status(400).send(
@@ -427,8 +492,34 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         return res.send('<!DOCTYPE html><html><head><title>404</title></head><body><h1>Not Found</h1></body></html>');
       }
 
+      // Domain status check
+      if (domain.status === 'paused') {
+        return showLandingPage(req, res, domain, ip, userAgent, 'DOMAIN_PAUSED');
+      }
+      if (domain.status === 'maintenance') {
+        res.setHeader('Content-Type', 'text/html; charset=utf-8');
+        return res.send(MAINTENANCE_HTML);
+      }
+
       if (!domain.redirectEnabled) {
         return showLandingPage(req, res, domain, ip, userAgent, 'REDIRECT_DISABLED');
+      }
+
+      // Country filtering
+      const country = detectCountry(req);
+      if (country) {
+        if (domain.allowedCountries) {
+          const allowed = domain.allowedCountries.split(',').map((c: string) => c.trim().toUpperCase());
+          if (allowed.length > 0 && !allowed.includes(country)) {
+            return showLandingPage(req, res, domain, ip, userAgent, `COUNTRY_NOT_ALLOWED:${country}`);
+          }
+        }
+        if (domain.blockedCountries) {
+          const blocked = domain.blockedCountries.split(',').map((c: string) => c.trim().toUpperCase());
+          if (blocked.includes(country)) {
+            return showLandingPage(req, res, domain, ip, userAgent, `COUNTRY_BLOCKED:${country}`);
+          }
+        }
       }
 
       if (await storage.isIpBlacklisted(ip)) {
@@ -489,6 +580,7 @@ setTimeout(function(){window.location.href=window.location.pathname+"?vt="+t+"&t
       const log = await storage.createAccessLog({
         domainId: domain.id, ipAddress: ip, userAgent,
         referer: referer || null,
+        country: country || null,
         isBot: detection.isBot, botScore: detection.score,
         botReasons: JSON.stringify(detection.reasons),
         destination: detection.isBot ? 'landing' : 'target',
@@ -502,19 +594,29 @@ setTimeout(function(){window.location.href=window.location.pathname+"?vt="+t+"&t
       wsManager.broadcastLog({ ...log, domain: domain.domain });
       wsManager.broadcastDomainClick(domain.id, detection.isBot);
 
+      // Auto-blacklist: if bot score >= 90 and auto_block is enabled
+      if (detection.isBot && detection.score >= 90) {
+        try {
+          const appSettings = await storage.getSettings();
+          if (appSettings.auto_block === 'true') {
+            await storage.addToIpBlacklist(ip, `Auto-blocked: score ${detection.score}`);
+          }
+        } catch { /* ignore auto-block errors */ }
+      }
+
       if (detection.isBot) {
         const page = domain.landingPageId
           ? await storage.getLandingPage(domain.landingPageId)
           : undefined;
         res.setHeader('Content-Type', 'text/html; charset=utf-8');
-        return res.send(page?.htmlContent || '<!DOCTYPE html><html><body><h1>Welcome</h1></body></html>');
+        return res.send(buildLandingHtml(page));
       }
 
       if (maxClicks > 0) {
         await storage.incrementRateLimit(domain.id, ip, rateLimitWindow);
       }
 
-      return performRedirect(res, domain.targetUrl, domain.redirectMode || '302');
+      return performRedirect(req, res, domain.targetUrl, domain.redirectMode || '302');
     } catch (e) {
       console.error('[cloaker]', e);
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
@@ -615,41 +717,65 @@ setTimeout(function(){window.location.href=window.location.pathname+"?vt="+t+"&t
     res.json({ ...stats, recentLogs: logs });
   });
 
+  // === HELPER: Handle Zod validation errors ===
+  const handleRouteError = (res: Response, error: unknown) => {
+    if (error instanceof ZodError) {
+      const readable = fromZodError(error);
+      return res.status(400).json({ message: readable.message });
+    }
+    const err = error as any;
+    const status = err?.status || err?.statusCode || 500;
+    const message = err?.message || 'İşlem başarısız';
+    return res.status(status).json({ message });
+  };
+
   // Domains
   app.get(api.domains.list.path, requireAuth, async (_req, res) => { res.json(await storage.getDomains()); });
   app.post(api.domains.create.path, requireAuth, async (req, res) => {
-    const input = api.domains.create.input.parse(req.body);
-    res.status(201).json(await storage.createDomain(input));
+    try {
+      const input = api.domains.create.input.parse(req.body);
+      res.status(201).json(await storage.createDomain(input));
+    } catch (e) { handleRouteError(res, e); }
   });
   app.put(api.domains.update.path, requireAuth, async (req, res) => {
-    const id = getValidIdOrSendError(res, req.params.id);
-    if (!id) return;
-    const input = api.domains.update.input.parse(req.body);
-    res.json(await storage.updateDomain(id, input));
+    try {
+      const id = getValidIdOrSendError(res, req.params.id);
+      if (!id) return;
+      const input = api.domains.update.input.parse(req.body);
+      res.json(await storage.updateDomain(id, input));
+    } catch (e) { handleRouteError(res, e); }
   });
   app.delete(api.domains.delete.path, requireAuth, async (req, res) => {
-    const id = getValidIdOrSendError(res, req.params.id);
-    if (!id) return;
-    await storage.deleteDomain(id);
-    res.status(204).end();
+    try {
+      const id = getValidIdOrSendError(res, req.params.id);
+      if (!id) return;
+      await storage.deleteDomain(id);
+      res.status(204).end();
+    } catch (e) { handleRouteError(res, e); }
   });
 
   // Landing Pages
   app.get(api.landingPages.list.path, requireAuth, async (_req, res) => { res.json(await storage.getLandingPages()); });
   app.post(api.landingPages.create.path, requireAuth, async (req, res) => {
-    const input = api.landingPages.create.input.parse(req.body);
-    res.status(201).json(await storage.createLandingPage(input));
+    try {
+      const input = api.landingPages.create.input.parse(req.body);
+      res.status(201).json(await storage.createLandingPage(input));
+    } catch (e) { handleRouteError(res, e); }
   });
   app.put(api.landingPages.update.path, requireAuth, async (req, res) => {
-    const id = getValidIdOrSendError(res, req.params.id);
-    if (!id) return;
-    res.json(await storage.updateLandingPage(id, api.landingPages.update.input.parse(req.body)));
+    try {
+      const id = getValidIdOrSendError(res, req.params.id);
+      if (!id) return;
+      res.json(await storage.updateLandingPage(id, api.landingPages.update.input.parse(req.body)));
+    } catch (e) { handleRouteError(res, e); }
   });
   app.delete(api.landingPages.delete.path, requireAuth, async (req, res) => {
-    const id = getValidIdOrSendError(res, req.params.id);
-    if (!id) return;
-    await storage.deleteLandingPage(id);
-    res.status(204).end();
+    try {
+      const id = getValidIdOrSendError(res, req.params.id);
+      if (!id) return;
+      await storage.deleteLandingPage(id);
+      res.status(204).end();
+    } catch (e) { handleRouteError(res, e); }
   });
 
   // Logs

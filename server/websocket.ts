@@ -200,18 +200,12 @@ class WebSocketManager {
   // Genel broadcast
   private broadcast(message: any) {
     const payload = JSON.stringify(message);
-    let sent = 0;
 
     this.clients.forEach((client, ws) => {
       if (ws.readyState === WebSocket.OPEN && client.authenticated) {
         ws.send(payload);
-        sent++;
       }
     });
-
-    if (sent > 0) {
-      console.log(`[WS] Broadcast ${message.type} to ${sent} clients`);
-    }
   }
 
   // Stats
