@@ -328,14 +328,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   // === CLOAKER ENGINE ===
-  const showLandingPage = async (res: any, domain: any, ip: string, ua: string, reason: string, score = 0, clickId?: string) => {
+  const showLandingPage = async (req: Request, res: any, domain: any, ip: string, ua: string, reason: string, score = 0, clickId?: string) => {
     const page = domain.landingPageId
       ? await storage.getLandingPage(domain.landingPageId)
       : undefined;
+    const referer = typeof (req.headers['referer'] || req.headers['referrer'] || '') === 'string'
+      ? (req.headers['referer'] || req.headers['referrer'] || '').toString().trim() : '';
     const log = await storage.createAccessLog({
       domainId: domain.id, ipAddress: ip, userAgent: ua,
+      referer: referer || null,
       isBot: true, botScore: score, botReasons: JSON.stringify([reason]),
-      destination: 'landing', clickId, headers: '{}'
+      destination: 'landing', clickId,
+      headers: JSON.stringify(sanitizeHeadersForLogs(req.headers))
     });
     await storage.incrementDomainClicks(domain.id, true);
     
@@ -395,7 +399,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         if (start && end) {
           const [sH, sM] = start.split(':').map(n => parseInt(n));
           const [eH, eM] = end.split(':').map(n => parseInt(n));
-          if (currentTime < sH * 60 + (sM || 0) || currentTime > eH * 60 + (eM || 0)) return false;
+          const startMinutes = sH * 60 + (sM || 0);
+          const endMinutes = eH * 60 + (eM || 0);
+          if (startMinutes <= endMinutes) {
+            // Normal range e.g. 09:00-18:00
+            if (currentTime < startMinutes || currentTime > endMinutes) return false;
+          } else {
+            // Midnight-crossing range e.g. 22:00-06:00
+            if (currentTime < startMinutes && currentTime > endMinutes) return false;
+          }
         }
       }
     } catch { /* fallback: allow */ }
@@ -416,30 +428,30 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
 
       if (!domain.redirectEnabled) {
-        return showLandingPage(res, domain, ip, userAgent, 'REDIRECT_DISABLED');
+        return showLandingPage(req, res, domain, ip, userAgent, 'REDIRECT_DISABLED');
       }
 
       if (await storage.isIpBlacklisted(ip)) {
-        return showLandingPage(res, domain, ip, userAgent, 'IP_BLACKLISTED', 100);
+        return showLandingPage(req, res, domain, ip, userAgent, 'IP_BLACKLISTED', 100);
       }
 
       if (await storage.isUaBlacklisted(userAgent)) {
-        return showLandingPage(res, domain, ip, userAgent, 'UA_BLACKLISTED', 100);
+        return showLandingPage(req, res, domain, ip, userAgent, 'UA_BLACKLISTED', 100);
       }
 
       if (!isWithinActiveHours(domain.activeHours, domain.activeDays, domain.timezone)) {
-        return showLandingPage(res, domain, ip, userAgent, 'OUTSIDE_ACTIVE_HOURS');
+        return showLandingPage(req, res, domain, ip, userAgent, 'OUTSIDE_ACTIVE_HOURS');
       }
 
       const isMobile = /mobile|android|iphone|ipad|ipod|blackberry|windows phone/i.test(userAgent);
       if ((isMobile && !(domain.allowMobile ?? true)) || (!isMobile && !(domain.allowDesktop ?? true))) {
-        return showLandingPage(res, domain, ip, userAgent, 'DEVICE_NOT_ALLOWED');
+        return showLandingPage(req, res, domain, ip, userAgent, 'DEVICE_NOT_ALLOWED');
       }
 
       const maxClicks = domain.maxClicksPerIp ?? 0;
       const rateLimitWindow = domain.rateLimitWindow ?? 3600;
       if (maxClicks > 0 && !(await storage.checkRateLimit(domain.id, ip, maxClicks, rateLimitWindow))) {
-        return showLandingPage(res, domain, ip, userAgent, 'RATE_LIMIT_EXCEEDED', 80);
+        return showLandingPage(req, res, domain, ip, userAgent, 'RATE_LIMIT_EXCEEDED', 80);
       }
 
       const referer = typeof (req.headers['referer'] || req.headers['referrer'] || '') === 'string' 
@@ -462,7 +474,7 @@ setTimeout(function(){window.location.href=window.location.pathname+"?vt="+t+"&t
 })()</script></body></html>`);
         }
         if (!(await storage.verifyChallengeToken(challengeToken, ip, domain.id, userAgent))) {
-          return showLandingPage(res, domain, ip, userAgent, 'JS_CHALLENGE_FAILED', 90);
+          return showLandingPage(req, res, domain, ip, userAgent, 'JS_CHALLENGE_FAILED', 90);
         }
       }
 
