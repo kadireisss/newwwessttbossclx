@@ -42,6 +42,8 @@ export class DatabaseStorage {
   private uaBlacklistCache = new CacheStore<{
     tokenSets: { token: string; wildcardRegex: RegExp | null }[][];
   }>(60); // 60s
+  private slugCache = new CacheStore<Map<string, Domain>>(30); // 30s
+  private settingsCache = new CacheStore<Record<string, string>>(60); // 60s
 
   // ============================================
   // AUTH
@@ -69,9 +71,12 @@ export class DatabaseStorage {
   }
 
   async getSettings(): Promise<Record<string, string>> {
+    const cached = this.settingsCache.get();
+    if (cached) return cached;
     const all = await db.select().from(settings);
     const result: Record<string, string> = {};
     for (const s of all) result[s.key] = s.value || '';
+    this.settingsCache.set(result);
     return result;
   }
 
@@ -88,32 +93,32 @@ export class DatabaseStorage {
     for (const [key, value] of Object.entries(entries)) {
       await this.setSetting(key, value);
     }
+    this.settingsCache.invalidate();
   }
 
   // ============================================
-  // STATS - SQL COUNT (no OOM risk!)
+  // STATS - Single optimized query with conditional aggregation
   // ============================================
-  async getStats(): Promise<{ totalVisits: number; botVisits: number; realVisits: number; todayVisits: number; todayBots: number; todayReal: number }> {
-    // Total counts via SQL aggregation
-    const [totalResult] = await db.select({ count: count() }).from(accessLogs);
-    const [botResult] = await db.select({ count: count() }).from(accessLogs).where(eq(accessLogs.isBot, true));
-    
-    const totalVisits = totalResult?.count ?? 0;
-    const botVisits = botResult?.count ?? 0;
-    const realVisits = totalVisits - botVisits;
-
-    // Today's counts
+  async getStats(): Promise<{ totalVisits: number; botVisits: number; realVisits: number; botPercentage: number; todayVisits: number; todayBots: number; todayReal: number }> {
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
-    
-    const [todayTotal] = await db.select({ count: count() }).from(accessLogs).where(gte(accessLogs.createdAt, todayStart));
-    const [todayBot] = await db.select({ count: count() }).from(accessLogs).where(and(gte(accessLogs.createdAt, todayStart), eq(accessLogs.isBot, true)));
-    
-    const todayVisits = todayTotal?.count ?? 0;
-    const todayBots = todayBot?.count ?? 0;
+
+    const [result] = await db.select({
+      totalVisits: count(),
+      botVisits: sql<number>`count(*) filter (where ${accessLogs.isBot} = true)`,
+      todayVisits: sql<number>`count(*) filter (where ${accessLogs.createdAt} >= ${todayStart})`,
+      todayBots: sql<number>`count(*) filter (where ${accessLogs.isBot} = true and ${accessLogs.createdAt} >= ${todayStart})`,
+    }).from(accessLogs);
+
+    const totalVisits = result?.totalVisits ?? 0;
+    const botVisits = Number(result?.botVisits ?? 0);
+    const realVisits = totalVisits - botVisits;
+    const botPercentage = totalVisits > 0 ? Math.round((botVisits / totalVisits) * 100) : 0;
+    const todayVisits = Number(result?.todayVisits ?? 0);
+    const todayBots = Number(result?.todayBots ?? 0);
     const todayReal = todayVisits - todayBots;
 
-    return { totalVisits, botVisits, realVisits, todayVisits, todayBots, todayReal };
+    return { totalVisits, botVisits, realVisits, botPercentage, todayVisits, todayBots, todayReal };
   }
 
   // ============================================
@@ -177,8 +182,22 @@ export class DatabaseStorage {
   }
 
   async getDomainBySlug(slug: string): Promise<Domain | undefined> {
-    const [domain] = await db.select().from(domains).where(eq(domains.slug, slug));
-    return domain;
+    let cached = this.slugCache.get();
+    if (cached) {
+      return cached.get(slug);
+    }
+    // Warm slug cache with all active domains
+    const allDomains = await db.select().from(domains);
+    const map = new Map<string, Domain>();
+    for (const d of allDomains) {
+      if (d.slug) map.set(d.slug, d);
+    }
+    this.slugCache.set(map);
+    return map.get(slug);
+  }
+
+  private invalidateSlugCache(): void {
+    this.slugCache.invalidate();
   }
 
   private generateSlug(): string {
@@ -188,11 +207,13 @@ export class DatabaseStorage {
   async createDomain(insertDomain: CreateDomainRequest): Promise<Domain> {
     const slug = this.generateSlug();
     const [domain] = await db.insert(domains).values({ ...insertDomain, slug }).returning();
+    this.invalidateSlugCache();
     return domain;
   }
 
   async updateDomain(id: number, update: UpdateDomainRequest): Promise<Domain> {
     const [domain] = await db.update(domains).set(update).where(eq(domains.id, id)).returning();
+    this.invalidateSlugCache();
     return domain;
   }
 
@@ -201,6 +222,7 @@ export class DatabaseStorage {
     await db.delete(rateLimits).where(eq(rateLimits.domainId, id));
     await db.delete(challengeTokens).where(eq(challengeTokens.domainId, id));
     await db.delete(domains).where(eq(domains.id, id));
+    this.invalidateSlugCache();
   }
 
   // Increment domain click counters
@@ -241,6 +263,14 @@ export class DatabaseStorage {
   }
 
   async deleteLandingPage(id: number): Promise<void> {
+    // Check if any domains reference this landing page
+    const referencingDomains = await db.select({ id: domains.id, domain: domains.domain })
+      .from(domains)
+      .where(eq(domains.landingPageId, id));
+    if (referencingDomains.length > 0) {
+      const names = referencingDomains.map(d => d.domain).join(', ');
+      throw Object.assign(new Error(`Bu sayfa şu domainler tarafından kullanılıyor: ${names}`), { status: 409 });
+    }
     await db.delete(landingPages).where(eq(landingPages.id, id));
   }
 
@@ -293,6 +323,9 @@ export class DatabaseStorage {
   }
 
   async addToIpBlacklist(ip: string, reason?: string): Promise<IpBlacklist> {
+    // Check for duplicate
+    const existing = await db.select().from(ipBlacklist).where(eq(ipBlacklist.ipAddress, ip.trim()));
+    if (existing.length > 0) return existing[0];
     const [entry] = await db.insert(ipBlacklist).values({ ipAddress: ip, reason }).returning();
     this.ipBlacklistCache.invalidate();
     return entry;
@@ -338,6 +371,9 @@ export class DatabaseStorage {
   }
 
   async addToUaBlacklist(pattern: string, reason?: string): Promise<UserAgentBlacklist> {
+    // Check for duplicate
+    const existing = await db.select().from(userAgentBlacklist).where(eq(userAgentBlacklist.pattern, pattern.trim()));
+    if (existing.length > 0) return existing[0];
     const [entry] = await db.insert(userAgentBlacklist).values({ pattern, reason }).returning();
     this.uaBlacklistCache.invalidate();
     return entry;

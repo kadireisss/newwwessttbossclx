@@ -73,12 +73,12 @@ export default function DashboardPage() {
 
   const activeDomains = domains?.filter(d => d.status === "active")?.length || 0;
   const totalDomains = domains?.length || 0;
-  const botPercentage = stats.totalVisits ? Math.round((stats.botVisits / stats.totalVisits) * 100) : 0;
+  const botPercentage = stats.botPercentage ?? (stats.totalVisits ? Math.round((stats.botVisits / stats.totalVisits) * 100) : 0);
   
   // Today stats
-  const todayVisits = (stats as any).todayVisits || 0;
-  const todayBots = (stats as any).todayBots || 0;
-  const todayReal = (stats as any).todayReal || 0;
+  const todayVisits = stats.todayVisits || 0;
+  const todayBots = stats.todayBots || 0;
+  const todayReal = stats.todayReal || 0;
 
   return (
     <Layout>
@@ -108,7 +108,7 @@ export default function DashboardPage() {
                 "w-2 h-2 rounded-full",
                 isConnected ? "bg-primary animate-pulse" : "bg-muted-foreground"
               )} />
-              v3.0 {isConnected ? "Canlı" : "Aktif"}
+              v3.2 {isConnected ? "Canlı" : "Aktif"}
             </Badge>
           </div>
         </div>
